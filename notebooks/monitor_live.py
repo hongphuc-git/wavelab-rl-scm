@@ -22,10 +22,10 @@ try:
                 text=stream.read().decode('utf-8',errors='replace')[-5000:]
         step=int(info.get('step',0));pct=min(100,100*step/TOTAL_STEPS)
         def fmt(value):return f'{value:.4f}' if isinstance(value,(int,float)) else '—'
-        state='Đang chạy' if status is None else 'Không có tiến trình trong phiên notebook này' if status=='unknown' else f'Đã thoát · mã {status}'
+        state='Đang chạy' if status is None else 'Không có tiến trình trong phiên notebook này' if status=='unknown' else 'Hoàn tất' if status==0 else 'Đã dừng an toàn' if status==3 else f'Đã dừng do lỗi · mã {status}'
         J=info.get('mean_J');error=info.get('mean_param_error')
         reward=-J-.01-2*error if isinstance(J,(int,float)) and isinstance(error,(int,float)) else None
-        view=(step,info.get('critic_loss'),status,text)
+        view=(step,info.get('critic_loss'),status)
         if view!=last_view:
             panel.update(HTML(f"""<div style="border:1px solid #438b91;border-radius:12px;padding:16px">
 <h3>EfficientNet V2-L epoch {EPOCH} + SAC</h3>
@@ -34,7 +34,7 @@ try:
 <p>J: {fmt(J)} · Reward: {fmt(reward)} · Sai số chuẩn hóa trong train: {fmt(error)}</p>
 <p>Actor loss: {fmt(info.get('actor_loss'))} · Critic loss: {fmt(info.get('critic_loss'))}</p>
 <p>Tốc độ: {fmt(info.get('env_steps_per_second'))} bước/giây · Còn khoảng {fmt(info.get('eta_hours'))} giờ</p>
-<details><summary>Log của phiên hiện tại — bấm để xem</summary><pre style="max-height:280px;overflow:auto;white-space:pre-wrap">{html.escape(text)}</pre></details>
+<p>Log kỹ thuật được lưu trong training.log; không hiển thị trên bảng.</p>
 </div>"""))
             last_view=view
         if status is not None:break
