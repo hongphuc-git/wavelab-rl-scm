@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+*.h5
+*.npz
+*.zip
+*.bin
+*.pth
+*.pkl
+results/
