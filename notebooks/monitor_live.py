@@ -23,6 +23,8 @@ try:
         step=int(info.get('step',0));pct=min(100,100*step/TOTAL_STEPS)
         def fmt(value):return f'{value:.4f}' if isinstance(value,(int,float)) else '—'
         state='Đang chạy' if status is None else 'Không có tiến trình trong phiên notebook này' if status=='unknown' else 'Hoàn tất' if status==0 else 'Đã dừng an toàn' if status==3 else f'Đã dừng do lỗi · mã {status}'
+        if status not in (None,0,3,'unknown') and 'KeyboardInterrupt' in text:
+            state='Đã bị ngắt (KeyboardInterrupt)'
         J=info.get('mean_J');error=info.get('mean_param_error')
         reward=-J-.01-2*error if isinstance(J,(int,float)) and isinstance(error,(int,float)) else None
         view=(step,info.get('critic_loss'),status)
@@ -33,7 +35,7 @@ try:
 <p><b>{step:,} / {TOTAL_STEPS:,} bước · {pct:.1f}% · {html.escape(state)}</b></p>
 <p>J: {fmt(J)} · Reward: {fmt(reward)} · Sai số chuẩn hóa trong train: {fmt(error)}</p>
 <p>Actor loss: {fmt(info.get('actor_loss'))} · Critic loss: {fmt(info.get('critic_loss'))}</p>
-<p>Tốc độ: {fmt(info.get('env_steps_per_second'))} bước/giây · Còn khoảng {fmt(info.get('eta_hours'))} giờ</p>
+<p>Tốc độ: {fmt(info.get('env_steps_per_second'))} bước/giây · Còn khoảng {fmt(info.get('eta_hours')) if status is None else '—'} giờ</p>
 <p>Log kỹ thuật được lưu trong training.log; không hiển thị trên bảng.</p>
 </div>"""))
             last_view=view
