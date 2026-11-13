@@ -105,7 +105,10 @@ class WaveDLEpoch50Encoder(BaseFeaturesExtractor):
     def forward(self,obs):
         x=obs['image'].float()
         with torch.no_grad():
-            features=torch.cat([self.backbone(x[:,i:i+1]) for i in range(3)],dim=1)
+            # One batched backbone call; preserve per-sample channel ordering.
+            batch=x.shape[0]
+            encoded=self.backbone(x.reshape(batch*3,1,*x.shape[-2:]))
+            features=encoded.reshape(batch,3*1280)
         return torch.cat([self.projection(features),obs['state'].float()],dim=1)
 
 
