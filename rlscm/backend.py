@@ -10,7 +10,7 @@ from .scm_solver import solve_scm_dispersion
 class SCM:
     def __init__(self, folder, nodes=30, frequencies=601, curve_points=0):
         self.archive = folder / 'worker'
-        self.archive.mkdir(exist_ok=True)
+        self.archive.mkdir(parents=True,exist_ok=True)
         self.folder = Path(tempfile.mkdtemp(prefix='scm_rl_'))
         self.nodes = nodes
         self.frequencies = frequencies
@@ -119,5 +119,6 @@ class SCM:
             except subprocess.TimeoutExpired:
                 self.process.kill()
         self.log.close()
+        self.archive.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self.folder / 'matlab.log', self.archive / 'matlab.log')
 

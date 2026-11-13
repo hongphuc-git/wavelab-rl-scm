@@ -127,6 +127,7 @@ class ParallelProgress(BaseCallback):
         return True
 
     def record(self):
+        self.folder.mkdir(parents=True, exist_ok=True)
         elapsed = time.perf_counter() - self.started
         done = self.num_timesteps - self.model._num_timesteps_at_start
         rate = done / elapsed if elapsed else 0.0
