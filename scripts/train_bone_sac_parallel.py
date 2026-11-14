@@ -60,7 +60,7 @@ class ImageTargets:
 
 
 def make_env(rank, folder, dataset, nodes, frequencies, horizon, action_scale, score_sigmas=(), param_weight=0.0,
-             param_axis_weights=(1.0, 1.0, 1.0), action_decay=1.0, lookup_table=None, reward_mode="absolute"):
+             param_axis_weights=(1.0, 1.0, 1.0), action_decay=1.0, lookup_table=None, reward_mode="absolute", misfit_mode="auto"):
     def factory():
         from rlscm.backend import SCM
         from rlscm.environment import PipeEnv
@@ -83,7 +83,7 @@ def make_env(rank, folder, dataset, nodes, frequencies, horizon, action_scale, s
         return ClosingPipeEnv(backend, targets, horizon=horizon, shuffle_targets=True,
                               image_score=True, action_scale=action_scale,
                               score_sigmas=score_sigmas, param_weight=param_weight,
-                              param_axis_weights=param_axis_weights, action_decay=action_decay, reward_mode=reward_mode)
+                              param_axis_weights=param_axis_weights, action_decay=action_decay, reward_mode=reward_mode, misfit_mode=misfit_mode)
     return factory
 
 
@@ -98,6 +98,7 @@ class ParallelProgress(BaseCallback):
         self.started = time.perf_counter()
         self.next_save = save_every
         self.window = []
+        self.window_reward = []
         self.window_nearest = []
         self.window_param = []
 
@@ -107,6 +108,7 @@ class ParallelProgress(BaseCallback):
 
     def _on_step(self):
         infos = self.locals.get('infos', [])
+        self.window_reward.extend(float(r) for r in self.locals.get('rewards', []))
         self.window.extend(float(i['J']) for i in infos if 'J' in i)
         self.window_nearest.extend(float(i['J_nearest']) for i in infos if 'J_nearest' in i)
         self.window_param.extend(float(i['param_error']) for i in infos if 'param_error' in i)
@@ -145,12 +147,14 @@ class ParallelProgress(BaseCallback):
                       unique_targets=unique, target_count=self.target_count,
                       env_steps_per_second=rate,
                       eta_hours=(remaining / rate / 3600) if rate else None,
+                      mean_reward=float(np.mean(self.window_reward)) if self.window_reward else None,
                       mean_J=float(np.mean(self.window)) if self.window else None,
                       mean_J_nearest=float(np.mean(self.window_nearest)) if self.window_nearest else None,
                       mean_param_error=float(np.mean(self.window_param)) if self.window_param else None,
                       actor_loss=value('train/actor_loss'), critic_loss=value('train/critic_loss'),
                       entropy_coefficient=value('train/ent_coef'))
         self.window = []
+        self.window_reward = []
         self.window_nearest = []
         self.window_param = []
         with (self.folder / 'training_metrics.jsonl').open('a', encoding='utf-8') as stream:
@@ -222,6 +226,8 @@ def main():
     parser.add_argument('--learning-rate', type=float, default=3e-4)
     parser.add_argument('--lr-final', type=float, default=None, help='Optional final learning rate; linear schedule over this training session')
     parser.add_argument('--entropy-coef', default='auto', help='auto, auto_0.01, or fixed coefficient such as 0.01')
+    parser.add_argument('--misfit-mode', choices=['auto','blur','nearest','le2024'], default='auto',
+                        help='Image J: auto preserves sigma-based selection; le2024 is the rasterized adaptation')
     parser.add_argument('--reward-mode', choices=['absolute','parameter_progress'], default='absolute')
     parser.add_argument('--gamma', type=float, default=.9)
     parser.add_argument('--torch-threads', type=int, default=8)
@@ -256,20 +262,25 @@ def main():
     config = dict(vars(args), out=str(out), dataset=str(args.dataset.resolve()), resume=str(args.resume) if args.resume else None,
                   lookup_table=str(args.lookup_table.resolve()) if args.lookup_table else None,
                   curve_points=args.frequencies,
-                  score=('blur_ncc_sigmas_' + '_'.join(f'{x:g}' for x in args.score_sigmas)) if args.score_sigmas
-                  else 'symmetric_image_distance',
+                  score=(args.misfit_mode if args.misfit_mode != 'auto' else
+                         ('blur_ncc_sigmas_' + '_'.join(f'{x:g}' for x in args.score_sigmas)
+                          if args.score_sigmas else 'symmetric_image_distance')),
                   reward=(f'{args.param_weight:g} * (error_before - error_after) - 0.01' if args.reward_mode=='parameter_progress' else '-J - 0.01' + (f' - {args.param_weight:g} * param_error' if args.param_weight else '')),
                   image_storage='int8', device=device, replay_ram_gib=ram_gib,
                   torch_version=torch.__version__)
-    resume_reward = json.loads((Path(args.resume).parent/'run_config.json').read_text()).get('reward_mode','absolute') if args.resume else args.reward_mode
-    if resume_reward != args.reward_mode: raise ValueError('Cannot resume across reward modes')
+    from rlscm.reward_protocol import validate_resume
+    if args.resume:
+        prior_path = Path(args.resume).parent / 'run_config.json'
+        validate_resume(json.loads(prior_path.read_text()), config)
+    elif (out / 'run_config.json').exists():
+        raise ValueError('Output folder already contains a run; resume it or choose a fresh folder')
     write_json(out / 'run_config.json', config)
     print('OUTPUT:', out, flush=True)
 
     factories = [make_env(i, out, args.dataset.resolve(), args.nodes, args.frequencies,
                           args.horizon, args.action_scale, tuple(args.score_sigmas), args.param_weight,
                           tuple(args.param_axis_weights), args.action_decay,
-                          str(args.lookup_table.resolve()) if args.lookup_table else None, args.reward_mode)
+                          str(args.lookup_table.resolve()) if args.lookup_table else None, args.reward_mode, args.misfit_mode)
                  for i in range(args.n_envs)]
     vec = SubprocVecEnv(factories, start_method='spawn') if args.n_envs > 1 else DummyVecEnv(factories)
     vec = VecMonitor(vec, filename=str(out / 'monitor'))

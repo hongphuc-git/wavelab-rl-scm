@@ -100,7 +100,7 @@ def misfit(target, candidate):
 
 class PipeEnv(gym.Env):
     def __init__(self, backend, targets, horizon=8, shuffle_targets=False, image_score=False, action_scale=.05, score_sigmas=(), param_weight=0.0,
-                 param_axis_weights=(1.0, 1.0, 1.0), action_decay=1.0, reward_mode="absolute"):
+                 param_axis_weights=(1.0, 1.0, 1.0), action_decay=1.0, reward_mode="absolute", misfit_mode="auto"):
         super().__init__()
         if len(targets) == 0:
             raise ValueError('At least one target is required')
@@ -110,6 +110,11 @@ class PipeEnv(gym.Env):
         self.action_scale = float(action_scale)
         # () keeps the original nearest-branch image J; e.g. (4, 12) selects blur_misfit.
         self.score_sigmas = tuple(float(x) for x in score_sigmas)
+        if misfit_mode not in ('auto', 'blur', 'nearest', 'le2024'):
+            raise ValueError('Unknown misfit mode')
+        if misfit_mode == 'blur' and not self.score_sigmas:
+            raise ValueError('blur misfit requires at least one sigma')
+        self.misfit_mode = misfit_mode
         # Privileged training reward: when > 0 and the target carries its true 'parameters',
         # the reward also penalises the normalized parameter error. Never part of the observation,
         # so a trained policy still needs only the image at test time.
@@ -137,6 +142,10 @@ class PipeEnv(gym.Env):
     def score(self):
         if not self.image_score:
             return misfit(self.target, self.candidate)
+        if self.misfit_mode == 'le2024':
+            return le2024_misfit(self.target_image, self.candidate['image'])
+        if self.misfit_mode == 'nearest':
+            return image_misfit(self.target_image, self.candidate['image'])
         if self.score_sigmas:
             return blur_misfit(self.target_image, self.candidate['image'], self.score_sigmas)
         return image_misfit(self.target_image, self.candidate['image'])
@@ -212,7 +221,7 @@ class PipeEnv(gym.Env):
         if self.J < self.best_J:
             self.best_J, self.best_m = self.J, LOW+self.x*(HIGH-LOW)
         info = {'J': self.J}
-        if self.image_score and self.score_sigmas:
+        if self.image_score and self.misfit_mode in ('auto', 'blur') and self.score_sigmas:
             # Monitoring only: the original nearest-branch (f,k) distance, not used in the reward.
             info['J_nearest'] = image_misfit(self.target_image, self.candidate['image'])
         reward = -self.J - .01
