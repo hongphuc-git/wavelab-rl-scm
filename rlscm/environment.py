@@ -100,7 +100,7 @@ def misfit(target, candidate):
 
 class PipeEnv(gym.Env):
     def __init__(self, backend, targets, horizon=8, shuffle_targets=False, image_score=False, action_scale=.05, score_sigmas=(), param_weight=0.0,
-                 param_axis_weights=(1.0, 1.0, 1.0), action_decay=1.0):
+                 param_axis_weights=(1.0, 1.0, 1.0), action_decay=1.0, reward_mode="absolute"):
         super().__init__()
         if len(targets) == 0:
             raise ValueError('At least one target is required')
@@ -120,6 +120,8 @@ class PipeEnv(gym.Env):
         if not 0 < action_decay <= 1:
             raise ValueError('action_decay must be in (0, 1]')
         self.action_decay = float(action_decay)
+        if reward_mode not in ("absolute","parameter_progress"): raise ValueError("Unknown reward mode")
+        self.reward_mode = reward_mode
         self.shuffle_targets = shuffle_targets
         self.image_score = image_score
         self._remaining_target_ids = []
@@ -201,6 +203,7 @@ class PipeEnv(gym.Env):
         self._restored_sampler=True
 
     def step(self, action):
+        previous_error = self.param_error()
         step = self.action_scale * self.action_decay ** self.t
         self.x = np.clip(self.x+step*np.asarray(action), 0, 1)
         self.candidate = self.backend.solve(LOW+self.x*(HIGH-LOW))
@@ -217,5 +220,10 @@ class PipeEnv(gym.Env):
         if error is not None:
             info['param_error'] = error
             reward -= self.param_weight * error
+        if self.reward_mode == 'parameter_progress':
+            if previous_error is None or error is None:
+                raise ValueError('parameter_progress reward requires training labels')
+            reward = self.param_weight * (previous_error - error) - .01
+            info['parameter_improvement'] = previous_error - error
         return self.observe(), reward, False, self.t >= self.horizon, info
 

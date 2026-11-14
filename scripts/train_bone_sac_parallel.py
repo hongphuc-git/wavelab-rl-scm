@@ -60,7 +60,7 @@ class ImageTargets:
 
 
 def make_env(rank, folder, dataset, nodes, frequencies, horizon, action_scale, score_sigmas=(), param_weight=0.0,
-             param_axis_weights=(1.0, 1.0, 1.0), action_decay=1.0, lookup_table=None):
+             param_axis_weights=(1.0, 1.0, 1.0), action_decay=1.0, lookup_table=None, reward_mode="absolute"):
     def factory():
         from rlscm.backend import SCM
         from rlscm.environment import PipeEnv
@@ -83,7 +83,7 @@ def make_env(rank, folder, dataset, nodes, frequencies, horizon, action_scale, s
         return ClosingPipeEnv(backend, targets, horizon=horizon, shuffle_targets=True,
                               image_score=True, action_scale=action_scale,
                               score_sigmas=score_sigmas, param_weight=param_weight,
-                              param_axis_weights=param_axis_weights, action_decay=action_decay)
+                              param_axis_weights=param_axis_weights, action_decay=action_decay, reward_mode=reward_mode)
     return factory
 
 
@@ -127,7 +127,7 @@ class ParallelProgress(BaseCallback):
         return True
 
     def record(self):
-        self.folder.mkdir(parents=True, exist_ok=True)
+        self.folder.mkdir(parents=True,exist_ok=True)
         elapsed = time.perf_counter() - self.started
         done = self.num_timesteps - self.model._num_timesteps_at_start
         rate = done / elapsed if elapsed else 0.0
@@ -222,6 +222,7 @@ def main():
     parser.add_argument('--learning-rate', type=float, default=3e-4)
     parser.add_argument('--lr-final', type=float, default=None, help='Optional final learning rate; linear schedule over this training session')
     parser.add_argument('--entropy-coef', default='auto', help='auto, auto_0.01, or fixed coefficient such as 0.01')
+    parser.add_argument('--reward-mode', choices=['absolute','parameter_progress'], default='absolute')
     parser.add_argument('--gamma', type=float, default=.9)
     parser.add_argument('--torch-threads', type=int, default=8)
     parser.add_argument('--save-every', type=int, default=20_000)
@@ -257,20 +258,26 @@ def main():
                   curve_points=args.frequencies,
                   score=('blur_ncc_sigmas_' + '_'.join(f'{x:g}' for x in args.score_sigmas)) if args.score_sigmas
                   else 'symmetric_image_distance',
-                  reward=('-J - 0.01' + (f' - {args.param_weight:g} * param_error' if args.param_weight else '')),
+                  reward=(f'{args.param_weight:g} * (error_before - error_after) - 0.01' if args.reward_mode=='parameter_progress' else '-J - 0.01' + (f' - {args.param_weight:g} * param_error' if args.param_weight else '')),
                   image_storage='int8', device=device, replay_ram_gib=ram_gib,
                   torch_version=torch.__version__)
+    resume_reward = json.loads((Path(args.resume).parent/'run_config.json').read_text()).get('reward_mode','absolute') if args.resume else args.reward_mode
+    if resume_reward != args.reward_mode: raise ValueError('Cannot resume across reward modes')
     write_json(out / 'run_config.json', config)
     print('OUTPUT:', out, flush=True)
 
     factories = [make_env(i, out, args.dataset.resolve(), args.nodes, args.frequencies,
                           args.horizon, args.action_scale, tuple(args.score_sigmas), args.param_weight,
                           tuple(args.param_axis_weights), args.action_decay,
-                          str(args.lookup_table.resolve()) if args.lookup_table else None)
+                          str(args.lookup_table.resolve()) if args.lookup_table else None, args.reward_mode)
                  for i in range(args.n_envs)]
     vec = SubprocVecEnv(factories, start_method='spawn') if args.n_envs > 1 else DummyVecEnv(factories)
     vec = VecMonitor(vec, filename=str(out / 'monitor'))
     try:
+        if args.resume:
+            prior=json.loads((Path(args.resume).parent/'run_config.json').read_text())
+            if prior.get('reward_mode','absolute') != args.reward_mode:
+                raise ValueError('Cannot resume across different reward modes')
         if args.resume:
             model = SAC.load(args.resume, env=vec, device=device, buffer_size=args.buffer_size,
                              batch_size=args.batch_size, learning_starts=args.learning_starts,
